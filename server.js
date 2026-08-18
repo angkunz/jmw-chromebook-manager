@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import nodemailer from 'nodemailer';
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -15,6 +16,16 @@ const one = async (s,p=[]) => (await q(s,p)).rows[0] || null;
 const sha = v => crypto.createHash('sha256').update(String(v)).digest('hex');
 const makeHash = (password,salt=crypto.randomBytes(16).toString('hex')) => `${salt}:${sha(salt+password)}`;
 const verify = (password,value) => { const [salt,h] = String(value||'').split(':'); return !!salt && h === sha(salt+password); };
+const smtp = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS ? nodemailer.createTransport({host:process.env.SMTP_HOST,port:Number(process.env.SMTP_PORT||465),secure:String(process.env.SMTP_SECURE||'true')==='true',auth:{user:process.env.SMTP_USER,pass:process.env.SMTP_PASS}}) : null;
+const adminMail = process.env.ADMIN_EMAIL || process.env.SMTP_TO || process.env.SMTP_USER || '';
+async function sendNewRepairEmail(repair,device){
+  if(!smtp || !adminMail) return {sent:false,error:'ยังไม่ได้ตั้งค่า SMTP หรือ ADMIN_EMAIL'};
+  const dateOnly=v=>{const s=String(v??'');const m=s.match(/^(\d{4}-\d{2}-\d{2})/);return m?m[1].split('-').reverse().join('/'):s};
+  try{
+    await smtp.sendMail({from:process.env.SMTP_FROM||process.env.SMTP_USER,to:adminMail,subject:`[JMW Chromebook] มีการแจ้งซ่อมใหม่ #${repair.id}`,text:`มีการแจ้งซ่อม Chromebook ใหม่\n\nเลขที่แจ้งซ่อม: #${repair.id}\nวันที่แจ้ง: ${dateOnly(repair.opened_at)}\nผู้แจ้ง: ${repair.reporter_name}\nอีเมล: ${repair.reporter_email||'-'}\nเครื่อง S/N: ${device.serial_number}\nรหัสเครื่อง: ${device.asset_code}\nอาการ: ${repair.issue}\nรายละเอียด: ${repair.details||'-'}\n\nเข้าสู่ระบบ Admin เพื่อดำเนินการต่อ`});
+    return {sent:true};
+  }catch(e){console.error('[SMTP NEW REPAIR]',e);return {sent:false,error:e.message||'ส่งอีเมลไม่สำเร็จ'}}
+}
 app.disable('x-powered-by');
 app.use(helmet({contentSecurityPolicy:false}));
 app.use(express.json({limit:'1mb'}));
@@ -27,8 +38,8 @@ async function audit(req,action,entity,id,detail=''){await q('INSERT INTO audit_
 function classYears(v){const t=String(v||'').replace(/\s/g,'');if(/ม\.?4(?:\/|$)/.test(t))return 3;if(/ม\.?5(?:\/|$)/.test(t))return 2;if(/ม\.?6(?:\/|$)/.test(t))return 1;return null}
 function addYears(dateValue,years){if(!dateValue||!years)return dateValue;const d=new Date(String(dateValue).slice(0,10)+'T00:00:00');const day=d.getDate();d.setFullYear(d.getFullYear()+years);if(d.getDate()!==day)d.setDate(0);return d.toISOString().slice(0,10)}
 app.get('/api/public/devices',async(req,res,next)=>{try{await init();res.json((await q("SELECT id,serial_number,asset_code,brand,model,status FROM devices WHERE status <> 'retired' ORDER BY asset_code")).rows)}catch(e){next(e)}});
-app.post('/api/public/repairs',async(req,res,next)=>{try{await init();const x=req.body||{};if(!x.device_id||!x.reporter_name||!x.issue)return res.status(400).json({error:'กรุณากรอกข้อมูลที่จำเป็นให้ครบ'});const device=await one("SELECT id,status FROM devices WHERE id=$1 AND status <> 'retired'",[Number(x.device_id)]);if(!device)return res.status(404).json({error:'ไม่พบเครื่อง Chromebook'});const r=await q('INSERT INTO repairs(device_id,reporter_name,reporter_email,issue,details,status) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,opened_at',[Number(x.device_id),String(x.reporter_name).trim(),x.reporter_email||null,String(x.issue).trim(),x.details||null,'received']);await q("UPDATE devices SET status='repair',updated_at=NOW() WHERE id=$1",[Number(x.device_id)]);res.status(201).json({ok:true,message:'แจ้งซ่อมเรียบร้อยแล้ว',repair:r.rows[0]})}catch(e){next(e)}});
-app.get('/api/health',async(req,res)=>{try{await init();await q('SELECT 1');res.json({ok:true,database:true,environment:{admin:!!process.env.ADMIN_PASSWORD,smtp:!!process.env.SMTP_HOST}})}catch(e){res.status(500).json({ok:false,error:e.message})}});
+app.post('/api/public/repairs',async(req,res,next)=>{try{await init();const x=req.body||{};if(!x.device_id||!x.reporter_name||!x.issue)return res.status(400).json({error:'กรุณากรอกข้อมูลที่จำเป็นให้ครบ'});const device=await one("SELECT id,serial_number,asset_code,status FROM devices WHERE id=$1 AND status <> 'retired'",[Number(x.device_id)]);if(!device)return res.status(404).json({error:'ไม่พบเครื่อง Chromebook'});const r=await q('INSERT INTO repairs(device_id,reporter_name,reporter_email,issue,details,status) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,opened_at,reporter_name,reporter_email,issue,details',[Number(x.device_id),String(x.reporter_name).trim(),x.reporter_email||null,String(x.issue).trim(),x.details||null,'received']);await q("UPDATE devices SET status='repair',updated_at=NOW() WHERE id=$1",[Number(x.device_id)]);const email=await sendNewRepairEmail(r.rows[0],device);res.status(201).json({ok:true,message:'แจ้งซ่อมเรียบร้อยแล้ว',repair:r.rows[0],emailSent:email.sent,emailError:email.sent?null:email.error})}catch(e){next(e)}});
+app.get('/api/health',async(req,res)=>{try{await init();await q('SELECT 1');res.json({ok:true,database:true,environment:{admin:!!process.env.ADMIN_PASSWORD,smtp:!!process.env.SMTP_HOST,emailRecipient:!!adminMail}})}catch(e){res.status(500).json({ok:false,error:e.message})}});
 app.post('/api/auth/login',async(req,res,next)=>{try{await init();const username=String(req.body?.username||'').trim();const password=String(req.body?.password||'');const a=await one('SELECT * FROM admin_users WHERE username=$1 AND active=TRUE',[username]);if(!a||!verify(password,a.password_hash))return res.status(401).json({error:'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'});const token=crypto.randomBytes(32).toString('hex');await q("INSERT INTO sessions(token_hash,admin_id,expires_at) VALUES($1,$2,NOW()+INTERVAL '12 hours')",[sha(token),a.id]);res.setHeader('Set-Cookie',`jmw_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200${process.env.NODE_ENV==='production'?'; Secure':''}`);res.json({ok:true,token,user:{id:a.id,username:a.username,role:a.role}})}catch(e){next(e)}});
 app.get('/api/auth/me',auth,(req,res)=>res.json({user:{id:req.s.admin_id,username:req.s.username,role:req.s.role}}));
 app.post('/api/auth/logout',auth,async(req,res,next)=>{try{const token=(req.headers.authorization||'').replace(/^Bearer\s+/i,'');await q('DELETE FROM sessions WHERE token_hash=$1',[sha(token)]);res.setHeader('Set-Cookie','jmw_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');res.json({ok:true})}catch(e){next(e)}});
