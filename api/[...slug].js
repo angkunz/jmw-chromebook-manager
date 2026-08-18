@@ -1,4 +1,2 @@
-import '../migration.js';
-import '../auth-sync.js';
-const { default: app } = await import('../server.js');
+import app from '../server.js';
 export default app;
