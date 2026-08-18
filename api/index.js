@@ -1,1 +1,3 @@
-import app from '../server.js'; export default app;
+import '../migration.js';
+const { default: app } = await import('../server.js');
+export default app;
