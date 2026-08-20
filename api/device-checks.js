@@ -7,6 +7,7 @@ const sha = v => crypto.createHash('sha256').update(String(v)).digest('hex');
 const clean = v => String(v ?? '').trim();
 const monthDate = v => /^\d{4}-\d{2}$/.test(clean(v)) ? `${v}-01` : null;
 const dateOnly = v => { const s=String(v??''); const m=s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m?`${m[3]}/${m[2]}/${m[1]}`:s; };
+const roomKey = v => clean(v).replace(/\s+/g,'').toUpperCase();
 
 let ready;
 async function init(){
@@ -79,7 +80,18 @@ export default async function handler(req,res){
     const action=clean(req.query?.action||'rooms');
 
     if(req.method==='GET' && action==='rooms'){
-      const rows=(await pool.query(`SELECT class_or_department, COUNT(*)::int device_count FROM users WHERE active=TRUE AND device_id IS NOT NULL AND type='student' AND COALESCE(class_or_department,'')<>'' GROUP BY class_or_department ORDER BY class_or_department`)).rows;
+      const rows=(await pool.query(`
+        SELECT
+          MIN(TRIM(u.class_or_department)) AS class_or_department,
+          COUNT(*)::int AS device_count
+        FROM users u
+        JOIN devices d ON d.id=u.device_id
+        WHERE u.active=TRUE
+          AND u.device_id IS NOT NULL
+          AND COALESCE(TRIM(u.class_or_department),'')<>''
+        GROUP BY UPPER(REGEXP_REPLACE(TRIM(u.class_or_department),'\\s+','','g'))
+        ORDER BY MIN(TRIM(u.class_or_department))
+      `)).rows;
       return send(res,{ok:true,rooms:rows});
     }
     if(req.method==='GET' && action==='items'){
@@ -87,15 +99,22 @@ export default async function handler(req,res){
       return send(res,{ok:true,items:rows});
     }
     if(req.method==='GET' && action==='roster'){
-      const room=clean(req.query?.class_or_department);
-      if(!room)return send(res,{error:'กรุณาระบุห้อง'},400);
-      const rows=(await pool.query(`SELECT u.id user_id,u.full_name,u.class_or_department,d.id device_id,d.serial_number,d.asset_code,d.brand,d.model FROM users u JOIN devices d ON d.id=u.device_id WHERE u.active=TRUE AND u.device_id IS NOT NULL AND u.type='student' AND u.class_or_department=$1 ORDER BY u.full_name`,[room])).rows;
+      const room=clean(req.query?.class_or_department); if(!room)return send(res,{error:'กรุณาระบุห้อง'},400);
+      const rows=(await pool.query(`
+        SELECT u.id user_id,u.full_name,u.class_or_department,d.id device_id,d.serial_number,d.asset_code,d.brand,d.model
+        FROM users u JOIN devices d ON d.id=u.device_id
+        WHERE u.active=TRUE
+          AND u.device_id IS NOT NULL
+          AND COALESCE(TRIM(u.class_or_department),'')<>''
+          AND UPPER(REGEXP_REPLACE(TRIM(u.class_or_department),'\\s+','','g'))=UPPER(REGEXP_REPLACE($1,'\\s+','','g'))
+        ORDER BY u.full_name
+      `,[room])).rows;
       return send(res,{ok:true,room,students:rows});
     }
     if(req.method==='GET' && action==='latest'){
       const room=clean(req.query?.class_or_department); if(!room)return send(res,{error:'กรุณาระบุห้อง'},400);
       const month=monthDate(req.query?.month);
-      const header=month ? (await pool.query('SELECT * FROM device_checks WHERE class_or_department=$1 AND check_month=$2 LIMIT 1',[room,month])).rows[0] : (await pool.query('SELECT * FROM device_checks WHERE class_or_department=$1 ORDER BY check_month DESC,checked_at DESC LIMIT 1',[room])).rows[0];
+      const header=month ? (await pool.query('SELECT * FROM device_checks WHERE UPPER(REGEXP_REPLACE(class_or_department,\'\\s+\',\'\',\'g\'))=UPPER(REGEXP_REPLACE($1,\'\\s+\',\'\',\'g\')) AND check_month=$2 LIMIT 1',[room,month])).rows[0] : (await pool.query('SELECT * FROM device_checks WHERE UPPER(REGEXP_REPLACE(class_or_department,\'\\s+\',\'\',\'g\'))=UPPER(REGEXP_REPLACE($1,\'\\s+\',\'\',\'g\')) ORDER BY check_month DESC,checked_at DESC LIMIT 1',[room])).rows[0];
       if(!header)return send(res,{ok:true,check:null});
       const rows=(await pool.query('SELECT id,device_id,user_id,item_id,item_label,is_normal,detail FROM device_check_results WHERE check_id=$1 ORDER BY user_id,item_id,id',[header.id])).rows;
       return send(res,{ok:true,check:{id:header.id,check_month:String(header.check_month).slice(0,7),class_or_department:header.class_or_department,inspector_name:header.inspector_name,inspector_signature:header.inspector_signature,checked_at:dateOnly(header.checked_at),results:rows}});
@@ -109,7 +128,8 @@ export default async function handler(req,res){
       }
       const client=await pool.connect();try{
         await client.query('BEGIN');
-        const h=(await client.query(`INSERT INTO device_checks(check_month,class_or_department,inspector_name,inspector_signature,checked_at,updated_at) VALUES($1,$2,$3,$4,NOW(),NOW()) ON CONFLICT(check_month,class_or_department) DO UPDATE SET inspector_name=EXCLUDED.inspector_name,inspector_signature=EXCLUDED.inspector_signature,checked_at=NOW(),updated_at=NOW() RETURNING *`,[month,room,name,signature])).rows[0];
+        const existing=(await client.query('SELECT id FROM device_checks WHERE check_month=$1 AND UPPER(REGEXP_REPLACE(class_or_department,\'\\s+\',\'\',\'g\'))=UPPER(REGEXP_REPLACE($2,\'\\s+\',\'\',\'g\')) LIMIT 1',[month,room])).rows[0];
+        const h=existing ? (await client.query('UPDATE device_checks SET class_or_department=$1,inspector_name=$2,inspector_signature=$3,checked_at=NOW(),updated_at=NOW() WHERE id=$4 RETURNING *',[room,name,signature,existing.id])).rows[0] : (await client.query(`INSERT INTO device_checks(check_month,class_or_department,inspector_name,inspector_signature,checked_at,updated_at) VALUES($1,$2,$3,$4,NOW(),NOW()) RETURNING *`,[month,room,name,signature])).rows[0];
         await client.query('DELETE FROM device_check_results WHERE check_id=$1',[h.id]);
         for(const st of x.students){for(const item of st.items){const meta=(await client.query('SELECT label FROM device_check_items WHERE id=$1 LIMIT 1',[item.item_id])).rows[0];await client.query(`INSERT INTO device_check_results(check_id,device_id,user_id,item_id,item_label,is_normal,detail) VALUES($1,$2,$3,$4,$5,$6,$7)`,[h.id,st.device_id,st.user_id,item.item_id,meta?.label||clean(item.item_label)||'รายการตรวจ',item.is_normal,clean(item.detail)||null])}}
         await client.query('COMMIT');
@@ -130,7 +150,7 @@ export default async function handler(req,res){
       const id=Number(req.body?.id);if(!id)return send(res,{error:'ไม่พบรหัสรายการ'},400);await pool.query('UPDATE device_check_items SET active=FALSE,updated_at=NOW() WHERE id=$1',[id]);return send(res,{ok:true});
     }
     if(req.method==='GET' && action==='admin-reports'){
-      const month=monthDate(req.query?.month),room=clean(req.query?.class_or_department);const params=[];let where=[];if(month){params.push(month);where.push(`c.check_month=$${params.length}`)}if(room){params.push(room);where.push(`c.class_or_department=$${params.length}`)}
+      const month=monthDate(req.query?.month),room=clean(req.query?.class_or_department);const params=[];let where=[];if(month){params.push(month);where.push(`c.check_month=$${params.length}`)}if(room){params.push(room);where.push(`UPPER(REGEXP_REPLACE(c.class_or_department,'\\s+','','g'))=UPPER(REGEXP_REPLACE($${params.length},'\\s+','','g'))`)}
       const rows=(await pool.query(`SELECT c.id,c.check_month,c.class_or_department,c.inspector_name,c.inspector_signature,c.checked_at,COUNT(DISTINCT r.device_id)::int device_count,COUNT(r.id)::int total_checks,COUNT(r.id) FILTER (WHERE r.is_normal=FALSE)::int abnormal_checks,COUNT(r.id) FILTER (WHERE r.is_normal=TRUE)::int normal_checks FROM device_checks c LEFT JOIN device_check_results r ON r.check_id=c.id ${where.length?'WHERE '+where.join(' AND '):''} GROUP BY c.id ORDER BY c.check_month DESC,c.class_or_department`,params)).rows;
       return send(res,{ok:true,reports:rows.map(x=>({...x,check_month:String(x.check_month).slice(0,7),checked_at:dateOnly(x.checked_at)}))});
     }
