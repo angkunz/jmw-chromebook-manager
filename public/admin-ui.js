@@ -33,8 +33,8 @@
       window.jmwAdminTableRefresh?.();
       addDeviceCheckMenu();
       const p=document.createElement('script');
-      p.src='/admin-table-format-patch.js?v=20260821-1';
-      p.onload=()=>{};
+      p.src='/admin-table-format-patch.js?v=20260821-2';
+      p.onload=()=>window.jmwAdminTableRefresh?.();
       document.head.appendChild(p);
     };
     s.onerror=()=>{window.__jmwAdminTableOwnsRender=false;console.error('[JMW] admin-table.js failed to load');};
