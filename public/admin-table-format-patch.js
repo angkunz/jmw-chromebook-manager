@@ -1,40 +1,38 @@
 (()=>{
-  const naturalCompare=(a,b)=>{
-    const sa=String(a??''),sb=String(b??'');
-    const split=s=>s.match(/\d+|\D+/g)||[''];
-    const aa=split(sa),bb=split(sb),n=Math.max(aa.length,bb.length);
-    for(let i=0;i<n;i++){
-      const x=aa[i]??'',y=bb[i]??'';
-      if(/^\d+$/.test(x)&&/^\d+$/.test(y)){
-        const d=Number(x)-Number(y);if(d)return d;
-      }else{
-        const d=x.localeCompare(y,'th');if(d)return d;
+  const patchFetch=()=>{
+    if(window.__jmwAdminLivePatch)return;
+    window.__jmwAdminLivePatch=true;
+    const original=window.fetch;
+    window.fetch=async(...args)=>{
+      const req=args[0],opts=args[1]||{};
+      const url=String(req?.url||req||'');
+      const method=String(opts.method||req?.method||'GET').toUpperCase();
+      const res=await original(...args);
+      if(/\/api\/(users|devices)(?:\/|\?|$)/.test(url)&&['POST','PUT','PATCH','DELETE'].includes(method)&&res.ok){
+        setTimeout(()=>window.jmwAdminTableRefresh?.(),200);
       }
-    }
-    return 0;
+      return res;
+    };
   };
+  function dedupUsers(){
+    const body=document.getElementById('userRows');if(!body)return;
+    const seen=new Set();
+    body.querySelectorAll('tr').forEach(tr=>{
+      const edit=tr.querySelector('[data-jmw-action="edit-user"]');
+      const id=edit?.dataset.id;
+      if(!id)return;
+      if(seen.has(id))tr.remove();else seen.add(id);
+    });
+  }
   const originalLocale=String.prototype.localeCompare;
   if(!String.prototype.__jmwNaturalPatched){
     Object.defineProperty(String.prototype,'__jmwNaturalPatched',{value:true,configurable:false});
     String.prototype.localeCompare=function(other,locales,options){
-      const a=String(this),b=String(other??'');
-      const pa=a.match(/^(.*?)(\d+)$/),pb=b.match(/^(.*?)(\d+)$/);
+      const a=String(this),b=String(other??''),pa=a.match(/^(.*?)(\d+)$/),pb=b.match(/^(.*?)(\d+)$/);
       if(pa&&pb&&pa[1].toLowerCase()===pb[1].toLowerCase())return Number(pa[2])-Number(pb[2]);
       return originalLocale.call(this,other,locales,options);
     };
   }
-  function labelUserCode(){
-    const body=document.getElementById('userRows');if(!body)return;
-    body.querySelectorAll('tr').forEach(tr=>{
-      const cells=tr.querySelectorAll('td');if(cells.length<3)return;
-      const cell=cells[2],text=cell.textContent||'';
-      const m=text.match(/^\s*S\/N:\s*(.*?)\s*·\s*(.+?)\s*$/);
-      if(m)cell.textContent=`S/N: ${m[1]} · รหัส: ${m[2]}`;
-    });
-  }
-  const run=()=>setTimeout(labelUserCode,0);
-  document.addEventListener('input',e=>{if(e.target.matches('#deviceSearch,#userSearch,#repairSearch'))run();});
-  document.addEventListener('change',e=>{if(e.target.matches('#deviceStatusFilter,#userActiveFilter,#repairStatusFilter,#deviceSort,#userSort,#repairSort,#auditSort'))run();});
-  document.addEventListener('click',e=>{if(e.target.closest('[data-p]'))run();});
-  const wait=()=>{if(window.jmwAdminTableRefresh&&!window.__jmwFormatRefreshPatched){const old=window.jmwAdminTableRefresh;window.jmwAdminTableRefresh=async(...args)=>{const r=await old(...args);run();return r};window.__jmwFormatRefreshPatched=true;run();}else setTimeout(wait,100)};wait();
+  const observe=()=>{const body=document.getElementById('userRows');if(!body||body.__jmwDedupObserver)return;const ob=new MutationObserver(dedupUsers);ob.observe(body,{childList:true});body.__jmwDedupObserver=ob;dedupUsers()};
+  patchFetch();observe();setTimeout(observe,300);setTimeout(observe,1000);
 })();
