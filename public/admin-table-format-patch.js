@@ -14,16 +14,6 @@
       return res;
     };
   };
-  function dedupUsers(){
-    const body=document.getElementById('userRows');if(!body)return;
-    const seen=new Set();
-    body.querySelectorAll('tr').forEach(tr=>{
-      const edit=tr.querySelector('[data-jmw-action="edit-user"]');
-      const id=edit?.dataset.id;
-      if(!id)return;
-      if(seen.has(id))tr.remove();else seen.add(id);
-    });
-  }
   const originalLocale=String.prototype.localeCompare;
   if(!String.prototype.__jmwNaturalPatched){
     Object.defineProperty(String.prototype,'__jmwNaturalPatched',{value:true,configurable:false});
@@ -42,25 +32,43 @@
     if(Number.isNaN(d.getTime()))return '';
     return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
   }
-  function patchUserForm(){
-    if(typeof window.userForm!=='function'||window.__jmwUserFormDatePatched)return;
-    const original=window.userForm;
-    window.userForm=function(id){
-      const result=original.apply(this,arguments);
-      const edit=document.getElementById('mf');
-      if(edit){
-        ['borrow_date','return_due_date'].forEach(name=>{
-          const field=edit.elements?.[name];
-          if(field)field.value=dateForInput(field.value);
-        });
-      }
-      return result;
-    };
-    window.__jmwUserFormDatePatched=true;
+  async function fillEditDates(id){
+    try{
+      const token=localStorage.getItem('jmw_token');
+      if(!token)return;
+      const res=await fetch('/api/users',{cache:'no-store',headers:{Authorization:`Bearer ${token}`}});
+      if(!res.ok)return;
+      const rows=await res.json();
+      const user=(Array.isArray(rows)?rows:[]).find(x=>Number(x.id)===Number(id));
+      if(!user)return;
+      const form=document.getElementById('mf');
+      if(!form)return;
+      const borrow=form.elements?.borrow_date;
+      const due=form.elements?.return_due_date;
+      if(borrow)borrow.value=dateForInput(user.borrow_date);
+      if(due)due.value=dateForInput(user.return_due_date);
+    }catch(e){console.warn('[JMW EDIT DATE]',e)}
+  }
+  function dedupUsers(){
+    const body=document.getElementById('userRows');if(!body)return;
+    const seen=new Set();
+    body.querySelectorAll('tr').forEach(tr=>{
+      const edit=tr.querySelector('[data-jmw-action="edit-user"]');
+      const id=edit?.dataset.id;
+      if(!id)return;
+      if(seen.has(id))tr.remove();else seen.add(id);
+    });
+  }
+  function bindEditDates(){
+    if(document.__jmwEditDateBound)return;
+    document.__jmwEditDateBound=true;
+    document.addEventListener('click',e=>{
+      const btn=e.target.closest('[data-jmw-action="edit-user"]');
+      if(!btn)return;
+      setTimeout(()=>fillEditDates(btn.dataset.id),0);
+    },true);
   }
   const observe=()=>{const body=document.getElementById('userRows');if(!body||body.__jmwDedupObserver)return;const ob=new MutationObserver(dedupUsers);ob.observe(body,{childList:true});body.__jmwDedupObserver=ob;dedupUsers()};
-  patchFetch();patchUserForm();observe();
-  setTimeout(()=>{patchUserForm();observe()},300);
-  setTimeout(()=>{patchUserForm();observe()},1000);
-  setInterval(patchUserForm,1000);
+  patchFetch();bindEditDates();observe();
+  setTimeout(observe,300);setTimeout(observe,1000);
 })();
