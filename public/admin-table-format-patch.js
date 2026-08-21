@@ -33,6 +33,34 @@
       return originalLocale.call(this,other,locales,options);
     };
   }
+  function dateForInput(value){
+    const s=String(value??'').trim();
+    if(!s)return '';
+    const iso=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if(iso)return `${iso[1]}-${iso[2]}-${iso[3]}`;
+    const d=new Date(s);
+    if(Number.isNaN(d.getTime()))return '';
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+  }
+  function patchUserForm(){
+    if(typeof window.userForm!=='function'||window.__jmwUserFormDatePatched)return;
+    const original=window.userForm;
+    window.userForm=function(id){
+      const result=original.apply(this,arguments);
+      const edit=document.getElementById('mf');
+      if(edit){
+        ['borrow_date','return_due_date'].forEach(name=>{
+          const field=edit.elements?.[name];
+          if(field)field.value=dateForInput(field.value);
+        });
+      }
+      return result;
+    };
+    window.__jmwUserFormDatePatched=true;
+  }
   const observe=()=>{const body=document.getElementById('userRows');if(!body||body.__jmwDedupObserver)return;const ob=new MutationObserver(dedupUsers);ob.observe(body,{childList:true});body.__jmwDedupObserver=ob;dedupUsers()};
-  patchFetch();observe();setTimeout(observe,300);setTimeout(observe,1000);
+  patchFetch();patchUserForm();observe();
+  setTimeout(()=>{patchUserForm();observe()},300);
+  setTimeout(()=>{patchUserForm();observe()},1000);
+  setInterval(patchUserForm,1000);
 })();
