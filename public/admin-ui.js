@@ -29,7 +29,14 @@
     window.__jmwAdminTableOwnsRender=true;
     const s=document.createElement('script');
     s.src='/admin-table.js?v=20260820-2';
-    s.onload=()=>{window.jmwAdminTableRefresh?.(); addDeviceCheckMenu();};
+    s.onload=()=>{
+      window.jmwAdminTableRefresh?.();
+      addDeviceCheckMenu();
+      const p=document.createElement('script');
+      p.src='/admin-table-format-patch.js?v=20260821-1';
+      p.onload=()=>{};
+      document.head.appendChild(p);
+    };
     s.onerror=()=>{window.__jmwAdminTableOwnsRender=false;console.error('[JMW] admin-table.js failed to load');};
     document.head.appendChild(s);
   };
