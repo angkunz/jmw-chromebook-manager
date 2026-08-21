@@ -37,6 +37,32 @@ async function requireAdmin(req, res) {
   return session;
 }
 
+app.get('/api/data-version', async (req, res) => {
+  const admin = await requireAdmin(req, res);
+  if (!admin) return;
+  try {
+    const q = await pool.query(`SELECT
+      (SELECT COUNT(*)::int FROM devices) AS devices_count,
+      (SELECT COUNT(*)::int FROM users) AS users_count,
+      (SELECT COUNT(*)::int FROM repairs) AS repairs_count,
+      (SELECT COUNT(*)::int FROM audit_log) AS audit_count,
+      (SELECT COALESCE(MAX(id),0)::int FROM devices) AS devices_max_id,
+      (SELECT COALESCE(MAX(id),0)::int FROM users) AS users_max_id,
+      (SELECT COALESCE(MAX(id),0)::int FROM repairs) AS repairs_max_id,
+      (SELECT COALESCE(MAX(id),0)::int FROM audit_log) AS audit_max_id,
+      (SELECT COALESCE(MAX(updated_at)::text,'') FROM devices) AS devices_updated,
+      (SELECT COALESCE(MAX(updated_at)::text,'') FROM users) AS users_updated,
+      (SELECT COALESCE(MAX(updated_at)::text,'') FROM repairs) AS repairs_updated,
+      (SELECT COALESCE(MAX(created_at)::text,'') FROM audit_log) AS audit_updated`);
+    const fingerprint = sha(JSON.stringify(q.rows[0]));
+    res.setHeader('Cache-Control','no-store');
+    return res.json({ ok:true, version:fingerprint });
+  } catch (e) {
+    console.error('[DATA VERSION]', e);
+    return res.status(500).json({ error:e.message || 'ตรวจสอบเวอร์ชันข้อมูลไม่สำเร็จ' });
+  }
+});
+
 app.post('/api/import-excel', upload.single('file'), async (req, res) => {
   try {
     const admin = await requireAdmin(req, res);
