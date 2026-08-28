@@ -13,8 +13,6 @@
     const deviceList=Array.isArray(devices)?devices:[];
     const repairList=Array.isArray(repairs)?repairs:[];
     const assignedIds=new Set(activeUsers.filter(u=>u.device_id).map(u=>Number(u.device_id)));
-    // A device is currently under repair only when its latest repair is still open.
-    // Completed/cancelled repairs therefore release the device back to the normal pool.
     const latestRepair=new Map();
     repairList.forEach(r=>{const id=Number(r.device_id);if(!id)return;const prev=latestRepair.get(id);if(!prev||Number(r.id)>Number(prev.id))latestRepair.set(id,r)});
     const repairIds=new Set([...latestRepair.entries()].filter(([,r])=>!['completed','cancelled'].includes(r.status)).map(([id])=>id));
@@ -34,14 +32,12 @@
     if($('sumOpenRepairs'))$('sumOpenRepairs').textContent=openRepairs;
     if($('sumRetired'))$('sumRetired').textContent=retiredCount;
     draw('deviceChart','doughnut',['พร้อมใช้งาน','กำลังใช้งาน','กำลังซ่อม','เลิกใช้'],[availableCount,assignedCount,repairCount,retiredCount]);
-    const order=['received','checking','waiting_parts','repairing','completed','cancelled'];
-    const rc={};order.forEach(k=>rc[k]=0);repairList.forEach(r=>{if(Object.prototype.hasOwnProperty.call(rc,r.status))rc[r.status]++;});
-    const present=order.filter(k=>rc[k]>0);
-    draw('repairChart','doughnut',present.length?present.map(k=>labels[k]||k):['ยังไม่มีข้อมูล'],present.length?present.map(k=>rc[k]):[0]);
+    const order=['received','checking','waiting_parts','repairing','completed','cancelled'];const rc={};order.forEach(k=>rc[k]=0);repairList.forEach(r=>{if(Object.prototype.hasOwnProperty.call(rc,r.status))rc[r.status]++;});const present=order.filter(k=>rc[k]>0);draw('repairChart','doughnut',present.length?present.map(k=>labels[k]||k):['ยังไม่มีข้อมูล'],present.length?present.map(k=>rc[k]):[0]);
     const userCounts={};activeUsers.forEach(u=>{const k=u.class_or_department||'ไม่ระบุ';userCounts[k]=(userCounts[k]||0)+1});const ukeys=Object.keys(userCounts);draw('userChart','bar',ukeys.length?ukeys:['ยังไม่มีข้อมูล'],ukeys.length?ukeys.map(k=>userCounts[k]):[0]);
     const due={overdue:0,within30:0,within90:0,later:0};const today=new Date(`${todayKey()}T00:00:00`);activeUsers.forEach(u=>{const key=dateKey(u.return_due_date);if(!key)return;const d=new Date(`${key}T00:00:00`),diff=Math.floor((d-today)/86400000);if(diff<0)due.overdue++;else if(diff<=30)due.within30++;else if(diff<=90)due.within90++;else due.later++});draw('dueChart','bar',['เกินกำหนด','ภายใน 30 วัน','ภายใน 90 วัน','มากกว่า 90 วัน'],[due.overdue,due.within30,due.within90,due.later]);
   }
   const start=()=>setTimeout(()=>refresh().catch(e=>console.warn('[JMW DASHBOARD]',e)),0);
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
   window.jmwDashboardRefresh=refresh;
+  window.addEventListener('jmw:data-changed',()=>refresh().catch(()=>{}));
 })();
