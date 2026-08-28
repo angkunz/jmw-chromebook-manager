@@ -13,8 +13,8 @@
     const deviceList=Array.isArray(devices)?devices:[];
     const repairList=Array.isArray(repairs)?repairs:[];
     const assignedIds=new Set(activeUsers.filter(u=>u.device_id).map(u=>Number(u.device_id)));
-    // The latest repair record is authoritative for whether a device is currently under repair.
-    // A completed/cancelled latest repair returns the device to the normal pool.
+    // A device is currently under repair only when its latest repair is still open.
+    // Completed/cancelled repairs therefore release the device back to the normal pool.
     const latestRepair=new Map();
     repairList.forEach(r=>{const id=Number(r.device_id);if(!id)return;const prev=latestRepair.get(id);if(!prev||Number(r.id)>Number(prev.id))latestRepair.set(id,r)});
     const repairIds=new Set([...latestRepair.entries()].filter(([,r])=>!['completed','cancelled'].includes(r.status)).map(([id])=>id));
